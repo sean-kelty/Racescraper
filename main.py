@@ -1,7 +1,6 @@
-import time
+    import time
 import csv
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
+import undetected_chromedriver as uc
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
@@ -9,25 +8,21 @@ from selenium.webdriver.support import expected_conditions as EC
 # --- CONFIGURATION ---
 STATE = "nc"
 MAX_PAGES = 3
-OUTPUT_FILE = "nc_races_cached.csv"
+OUTPUT_FILE = "nc_races_nuclear.csv"
 WAIT_TIMEOUT = 20
 
-# --- PART 1: SETUP STEALTH SELENIUM ---
 def setup_driver():
-    options = Options()
-    options.add_argument("--headless=new") 
-    options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-    options.add_argument("--window-size=1920,1080")
-    options.add_argument("--disable-blink-features=AutomationControlled")
-    options.add_experimental_option("excludeSwitches", ["enable-automation"])
-    options.add_experimental_option("useAutomationExtension", False)
+    # undetected-chromedriver works best when you DON'T touch too many options.
+    options = uc.ChromeOptions()
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    # Note: We do NOT add '--headless' here. We will handle that in the workflow file.
+    # This allows the browser to think it is visible, which bypasses detection.
     
-    driver = webdriver.Chrome(options=options)
-    driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+    driver = uc.Chrome(options=options, version_main=None) 
     return driver
 
-# --- PART 2: SMART URL RESOLVER ---
-def resolve_redirect_selenium(driver, link_element):
+def resolve_redirect(driver, link_element):
     original_window = driver.current_window_handle
     try:
         url_to_visit = link_element.get_attribute("href")
@@ -49,50 +44,46 @@ def resolve_redirect_selenium(driver, link_element):
         driver.close()
         driver.switch_to.window(original_window)
         return final_url
-
-    except Exception:
+    except:
         if len(driver.window_handles) > 1:
             driver.close()
         driver.switch_to.window(original_window)
-        return "Error Resolving"
+        return "N/A"
 
-# --- PART 3: MAIN SCRAPER ---
 def scrape_races():
+    print("Initializing Undetected Chrome...")
     driver = setup_driver()
     results = []
-    
-    # --- CACHE INITIALIZATION ---
-    # This dictionary stores: { "internal_url": "final_destination_url" }
     link_cache = {} 
-    
-    print(f"Starting Scrape for {STATE.upper()} with Caching enabled...")
 
     try:
         for page_num in range(1, MAX_PAGES + 1):
             url = f"https://www.runningintheusa.com/classic/list/{STATE}/upcoming/page-{page_num}"
-            print(f"Processing Page {page_num}...")
+            print(f"Scraping Page {page_num}: {url}")
             
             driver.get(url)
             
+            # Wait longer for the initial check (Cloudflare often takes 5-10s to verify)
             try:
-                WebDriverWait(driver, 15).until(
+                WebDriverWait(driver, 20).until(
                     EC.presence_of_element_located((By.CSS_SELECTOR, ".index-race-row"))
                 )
             except:
-                print("   -> Timed out waiting for rows. Skipping page.")
+                print("   -> Timed out waiting for rows. Checking page source for errors...")
+                # Debugging: print a snippet of the page to see if we were blocked
+                print(driver.page_source[:500])
                 continue
 
             rows = driver.find_elements(By.CSS_SELECTOR, ".index-race-row")
+            print(f"   -> Found {len(rows)} races.")
             
             for i, row in enumerate(rows):
                 try:
-                    # Refresh element reference
                     current_row = driver.find_elements(By.CSS_SELECTOR, ".index-race-row")[i]
                     
                     race_name = current_row.find_element(By.TAG_NAME, "h3").text.strip()
                     full_text = current_row.text
                     
-                    # Parsing
                     lines = full_text.split('\n')
                     location_text = next((line for line in lines if f", {STATE.upper()}" in line), "Unknown")
                     city = location_text.split(',')[0].strip()
@@ -105,39 +96,23 @@ def scrape_races():
                     
                     is_virtual = "Yes" if "Virtual" in full_text else "No"
                     is_trail = "Yes" if "Trail" in full_text else "No"
-
-                    # --- CACHED RESOLUTION LOGIC ---
+                    
                     real_website = "N/A"
-                    try:
-                        link_el = current_row.find_element(By.PARTIAL_LINK_TEXT, "More Information")
-                        
-                        # 1. Get the internal link string (e.g. ".../click.pl?id=555")
-                        internal_link = link_el.get_attribute("href")
-                        
-                        if is_virtual == "No":
-                            # 2. Check the Cache
+                    if is_virtual == "No":
+                        try:
+                            link_el = current_row.find_element(By.PARTIAL_LINK_TEXT, "More Information")
+                            internal_link = link_el.get_attribute("href")
+                            
                             if internal_link in link_cache:
                                 real_website = link_cache[internal_link]
-                                print(f"   -> [CACHE HIT] Used saved link for: {race_name}")
                             else:
-                                # 3. Not in cache? Resolve it and save it.
-                                print(f"   -> Resolving URL for: {race_name}...", end="", flush=True)
-                                resolved_url = resolve_redirect_selenium(driver, link_el)
-                                
-                                # Save to cache
-                                link_cache[internal_link] = resolved_url
-                                real_website = resolved_url
-                                print(f" Done! ({real_website})")
-                        else:
-                            real_website = "Virtual Race Link"
-                            
-                    except Exception:
-                        pass 
-
+                                real_website = resolve_redirect(driver, link_el)
+                                link_cache[internal_link] = real_website
+                        except:
+                            pass
+                    
                     results.append([race_name, city, STATE.upper(), distances, is_trail, is_virtual, real_website])
-
                 except Exception as e:
-                    print(f"   -> Skipped a row due to error: {e}")
                     continue
 
     finally:
@@ -147,8 +122,7 @@ def scrape_races():
         writer = csv.writer(f)
         writer.writerow(["Name", "City", "State", "Distance", "Is Trail?", "Is Virtual?", "Website"])
         writer.writerows(results)
-    
-    print(f"\nDone! Scraped {len(results)} races.")
+    print(f"Saved {len(results)} rows to {OUTPUT_FILE}")
 
 if __name__ == "__main__":
     scrape_races()
