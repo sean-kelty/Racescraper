@@ -1,4 +1,4 @@
-name: Run Nuclear Scraper
+name: Run Stealth Scraper
 
 on:
   workflow_dispatch:
@@ -15,20 +15,17 @@ jobs:
         with:
           python-version: '3.9'
 
-      # Install Xvfb (The Virtual Monitor) and Dependencies
-      - name: Install System Dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y xvfb google-chrome-stable
-          pip install -r requirements.txt
+      - name: Install dependencies
+        run: pip install -r requirements.txt
 
-      # Run the script inside the virtual monitor
+      # Run the script (Standard Python, no Xvfb needed)
       - name: Run Scraper
-        run: xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" python main.py
+        run: python main.py
 
+      # Upload the CORRECT file name
       - name: Upload CSV Artifact
         uses: actions/upload-artifact@v4
         with:
           name: race-results
-          path: nc_races_nuclear.csv
+          path: nc_races_stealth.csv
           retention-days: 5
