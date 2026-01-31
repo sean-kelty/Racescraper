@@ -1,7 +1,7 @@
-name: Run Race Scraper
+name: Run Nuclear Scraper
 
 on:
-  workflow_dispatch:      # Adds a "Run" button
+  workflow_dispatch:
 
 jobs:
   scrape:
@@ -15,15 +15,20 @@ jobs:
         with:
           python-version: '3.9'
 
-      - name: Install dependencies
-        run: pip install -r requirements.txt
+      # Install Xvfb (The Virtual Monitor) and Dependencies
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb google-chrome-stable
+          pip install -r requirements.txt
 
+      # Run the script inside the virtual monitor
       - name: Run Scraper
-        run: python main.py
+        run: xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" python main.py
 
       - name: Upload CSV Artifact
         uses: actions/upload-artifact@v4
         with:
           name: race-results
-          path: nc_races_cached.csv
+          path: nc_races_nuclear.csv
           retention-days: 5
